@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { BalanceCard } from "@/components/BalanceCard";
@@ -152,7 +153,8 @@ export default function Home() {
     .reduce((acc, expense) => acc + Number(expense.amount), 0);
 
   return (
-    <main className="mx-auto w-full max-w-4xl space-y-4 px-4 pb-24 pt-6 md:pb-6">
+    <main className="mx-auto w-full max-w-4xl space-y-4 px-4 pt-6">
+      {/* Top Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-3xl font-black tracking-tight text-slate-900">SplitFree</h1>
@@ -161,12 +163,39 @@ export default function Home() {
         <SignOutButton />
       </div>
 
+      {/* Quick Action Buttons */}
+      <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+        <Link
+          href="/expenses/new"
+          className="flex flex-col items-center justify-center rounded-xl bg-teal-700 p-3 text-center text-white shadow-sm transition hover:bg-teal-800"
+        >
+          <span className="text-xl font-bold leading-none">+</span>
+          <span className="mt-1 text-xs font-semibold sm:text-sm">Add Expense</span>
+        </Link>
+        <Link
+          href="/groups"
+          className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-3 text-center text-slate-800 shadow-sm transition hover:bg-slate-50"
+        >
+          <span className="text-lg leading-none">👥</span>
+          <span className="mt-1 text-xs font-semibold sm:text-sm">Groups</span>
+        </Link>
+        <Link
+          href="/friends"
+          className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-3 text-center text-slate-800 shadow-sm transition hover:bg-slate-50"
+        >
+          <span className="text-lg leading-none">👤</span>
+          <span className="mt-1 text-xs font-semibold sm:text-sm">Friends</span>
+        </Link>
+      </div>
+
+      {/* Balance Summary Cards */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <BalanceCard label="Total You are Owed" amount={totalOwed} tone="owed" />
         <BalanceCard label="Total You Owe" amount={totalYouOwe} tone="owe" />
         <BalanceCard label="Total Net Balance" amount={currentNet} tone="net" />
       </section>
 
+      {/* Spending Insights */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Spending Insights</CardTitle>
@@ -184,6 +213,7 @@ export default function Home() {
         </CardContent>
       </Card>
 
+      {/* Recent Activity List */}
       {loading ? (
         <Card>
           <CardContent className="p-4 text-sm text-slate-600">Loading activity...</CardContent>
