@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Loader2 } from "lucide-react";
@@ -29,7 +29,9 @@ export default function NewExpensePage() {
   const [description, setDescription] = useState<string>("");
   const [amount, setAmount] = useState<string>("");
   const [paidBy, setPaidBy] = useState<string>("");
+  const [splitType, setSplitType] = useState<"equal" | "exact">("equal");
   const [splitWith, setSplitWith] = useState<string[]>([]);
+  const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [category, setCategory] = useState<string>("general");
 
   const loadData = useCallback(async () => {
@@ -99,7 +101,11 @@ export default function NewExpensePage() {
     setGroups(groupsWithMembers);
     if (groupsWithMembers.length > 0) {
       setSelectedGroupId(groupsWithMembers[0].id);
-      setSplitWith(groupsWithMembers[0].members.map((m) => m.id));
+      const initialMemberIds = groupsWithMembers[0].members.map((m) => m.id);
+      setSplitWith(initialMemberIds);
+      const initAmounts: Record<string, string> = {};
+      initialMemberIds.forEach((id) => (initAmounts[id] = ""));
+      setCustomAmounts(initAmounts);
     }
 
     setLoading(false);
@@ -109,12 +115,15 @@ export default function NewExpensePage() {
     void loadData();
   }, [loadData]);
 
-  // Update selected group members when group dropdown changes
   const handleGroupChange = (groupId: string) => {
     setSelectedGroupId(groupId);
     const grp = groups.find((g) => g.id === groupId);
     if (grp) {
-      setSplitWith(grp.members.map((m) => m.id));
+      const memberIds = grp.members.map((m) => m.id);
+      setSplitWith(memberIds);
+      const initAmounts: Record<string, string> = {};
+      memberIds.forEach((id) => (initAmounts[id] = ""));
+      setCustomAmounts(initAmounts);
     }
   };
 
@@ -124,6 +133,24 @@ export default function NewExpensePage() {
     );
   };
 
+  const handleCustomAmountChange = (memberId: string, val: string) => {
+    setCustomAmounts((prev) => ({
+      ...prev,
+      [memberId]: val,
+    }));
+  };
+
+  const activeGroup = groups.find((g) => g.id === selectedGroupId);
+
+  const customTotal = useMemo(() => {
+    return Object.entries(customAmounts)
+      .filter(([id]) => splitWith.includes(id))
+      .reduce((sum, [, val]) => sum + (parseFloat(val) || 0), 0);
+  }, [customAmounts, splitWith]);
+
+  const numTotalAmount = parseFloat(amount) || 0;
+  const remainingDifference = Number((numTotalAmount - customTotal).toFixed(2));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroupId || !description || !amount || splitWith.length === 0) {
@@ -131,10 +158,32 @@ export default function NewExpensePage() {
       return;
     }
 
-    const numAmount = parseFloat(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      setError("Please enter a valid amount.");
+    if (isNaN(numTotalAmount) || numTotalAmount <= 0) {
+      setError("Please enter a valid total amount.");
       return;
+    }
+
+    let splitsToInsert: { expense_id?: string; user_id: string; amount_owed: number }[] = [];
+
+    if (splitType === "equal") {
+      const splitAmount = Number((numTotalAmount / splitWith.length).toFixed(2));
+      splitsToInsert = splitWith.map((userId) => ({
+        user_id: userId,
+        amount_owed: splitAmount,
+      }));
+    } else {
+      // Unequal / Exact Split Validation
+      if (Math.abs(remainingDifference) > 0.01) {
+        setError(
+          `The sum of individual amounts ($${customTotal.toFixed(2)}) must match the total ($${numTotalAmount.toFixed(2)}). Difference: $${remainingDifference.toFixed(2)}`
+        );
+        return;
+      }
+
+      splitsToInsert = splitWith.map((userId) => ({
+        user_id: userId,
+        amount_owed: parseFloat(customAmounts[userId] || "0"),
+      }));
     }
 
     setSaving(true);
@@ -146,7 +195,7 @@ export default function NewExpensePage() {
       .insert({
         group_id: selectedGroupId,
         description,
-        amount: numAmount,
+        amount: numTotalAmount,
         paid_by: paidBy,
         category,
         is_settlement: false,
@@ -160,15 +209,13 @@ export default function NewExpensePage() {
       return;
     }
 
-    // 2. Insert the equal splits
-    const splitAmount = Number((numAmount / splitWith.length).toFixed(2));
-    const splitsToInsert = splitWith.map((userId) => ({
+    // 2. Insert the calculated/exact splits
+    const formattedSplits = splitsToInsert.map((s) => ({
+      ...s,
       expense_id: expenseData.id,
-      user_id: userId,
-      amount_owed: splitAmount,
     }));
 
-    const { error: splitError } = await supabase.from("expense_splits").insert(splitsToInsert);
+    const { error: splitError } = await supabase.from("expense_splits").insert(formattedSplits);
 
     if (splitError) {
       setError(splitError.message);
@@ -179,8 +226,6 @@ export default function NewExpensePage() {
     router.push("/");
     router.refresh();
   };
-
-  const activeGroup = groups.find((g) => g.id === selectedGroupId);
 
   return (
     <main className="mx-auto w-full max-w-xl space-y-4 px-4 pt-6">
@@ -193,7 +238,7 @@ export default function NewExpensePage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Add Expense</h1>
-          <p className="text-xs text-slate-500">Split a new bill with your group</p>
+          <p className="text-xs text-slate-500">Split an expense equally or with custom amounts</p>
         </div>
       </div>
 
@@ -247,7 +292,7 @@ export default function NewExpensePage() {
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Description</label>
                 <input
                   type="text"
-                  placeholder="e.g. Dinner, Groceries, Movie"
+                  placeholder="e.g. Dinner, Groceries, Flight tickets"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none"
@@ -256,7 +301,7 @@ export default function NewExpensePage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Amount ($)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Total Amount ($)</label>
                 <input
                   type="number"
                   step="0.01"
@@ -287,31 +332,110 @@ export default function NewExpensePage() {
                 </select>
               </div>
 
+              {/* Split Method Toggle */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Split With ({splitWith.length} people)
-                </label>
-                <div className="space-y-1.5 rounded-lg border border-slate-200 p-2 max-h-48 overflow-y-auto">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Split Type</label>
+                <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setSplitType("equal")}
+                    className={`rounded-md py-1.5 text-xs font-semibold transition ${
+                      splitType === "equal"
+                        ? "bg-white text-teal-800 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Split Equally (=)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSplitType("exact")}
+                    className={`rounded-md py-1.5 text-xs font-semibold transition ${
+                      splitType === "exact"
+                        ? "bg-white text-teal-800 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Unequal / Exact Amounts (123)
+                  </button>
+                </div>
+              </div>
+
+              {/* Split With Members Section */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-700">
+                    Split Details ({splitWith.length} involved)
+                  </label>
+                  {splitType === "exact" && (
+                    <span
+                      className={`text-xs font-semibold ${
+                        Math.abs(remainingDifference) <= 0.01 ? "text-emerald-600" : "text-amber-600"
+                      }`}
+                    >
+                      {remainingDifference === 0
+                        ? "✓ Total matches"
+                        : remainingDifference > 0
+                        ? `$${remainingDifference.toFixed(2)} left to assign`
+                        : `$${Math.abs(remainingDifference).toFixed(2)} over total`}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-slate-200 p-2 max-h-60 overflow-y-auto">
                   {activeGroup?.members.map((member) => {
                     const isChecked = splitWith.includes(member.id);
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={member.id}
-                        onClick={() => handleToggleMember(member.id)}
-                        className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs font-medium transition ${
-                          isChecked
-                            ? "bg-teal-50 text-teal-900 border border-teal-200"
-                            : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                        className={`flex items-center justify-between gap-2 rounded-md p-2 transition ${
+                          isChecked ? "bg-slate-50 border border-slate-200" : "opacity-60 bg-white"
                         }`}
                       >
-                        <span>
-                          {member.id === currentUserId
-                            ? "You"
-                            : member.full_name || member.email || "Member"}
-                        </span>
-                        {isChecked && <Check className="h-4 w-4 text-teal-700" />}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMember(member.id)}
+                          className="flex items-center gap-2 flex-1 text-left"
+                        >
+                          <div
+                            className={`flex h-5 w-5 items-center justify-center rounded border ${
+                              isChecked
+                                ? "bg-teal-700 border-teal-700 text-white"
+                                : "border-slate-300 bg-white"
+                            }`}
+                          >
+                            {isChecked && <Check className="h-3.5 w-3.5" />}
+                          </div>
+                          <span className="text-xs font-medium text-slate-800">
+                            {member.id === currentUserId
+                              ? "You"
+                              : member.full_name || member.email || "Member"}
+                          </span>
+                        </button>
+
+                        {/* If Unequal Split, show editable input for that user */}
+                        {splitType === "exact" ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-slate-500">$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="0.00"
+                              disabled={!isChecked}
+                              value={customAmounts[member.id] ?? ""}
+                              onChange={(e) => handleCustomAmountChange(member.id, e.target.value)}
+                              className="w-20 rounded border border-slate-300 px-2 py-1 text-right text-xs text-slate-900 focus:border-teal-600 focus:outline-none disabled:bg-slate-100"
+                            />
+                          </div>
+                        ) : (
+                          isChecked && (
+                            <span className="text-xs text-slate-500 font-medium">
+                              ${splitWith.length > 0 ? (numTotalAmount / splitWith.length).toFixed(2) : "0.00"}
+                            </span>
+                          )
+                        )}
+                      </div>
                     );
                   })}
                 </div>
