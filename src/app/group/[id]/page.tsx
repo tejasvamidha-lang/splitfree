@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, ChevronLeft } from "lucide-react";
+import { ArrowLeftRight, ChevronLeft, CheckCircle2, Loader2, HandCoins } from "lucide-react";
 
 import { AddExpenseModal } from "@/components/AddExpenseModal";
 import { BalanceCard } from "@/components/BalanceCard";
@@ -33,6 +33,13 @@ export default function GroupDetailPage() {
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Profile[]>([]);
   const [expenses, setExpenses] = useState<ExpenseWithSplits[]>([]);
+
+  // Manual Settle State
+  const [showManualSettle, setShowManualSettle] = useState(false);
+  const [settleRecipient, setSettleRecipient] = useState<string>("");
+  const [settleAmount, setSettleAmount] = useState<string>("");
+  const [settling, setSettling] = useState(false);
+  const [settleError, setSettleError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -120,16 +127,21 @@ export default function GroupDetailPage() {
     setGroup(groupData as Group);
     setMembers(mappedMembers);
     setExpenses(expensesWithSplits);
+
+    // Set default recipient to someone else in the group
+    const otherMember = mappedMembers.find((m) => m.id !== user.id);
+    if (otherMember) {
+      setSettleRecipient(otherMember.id);
+    }
+
     setLoading(false);
   }, [id, router, supabase]);
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (id) {
       void loadData();
     }
   }, [id, loadData]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const userMap = useMemo(() => {
     return members.reduce<Record<string, Profile>>((acc, member) => {
@@ -146,6 +158,58 @@ export default function GroupDetailPage() {
   const youAreOwed = currentNet > 0 ? currentNet : 0;
   const youOwe = currentNet < 0 ? Math.abs(currentNet) : 0;
 
+  // Direct manual settlement function
+  const handleDirectSettle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settleRecipient || !settleAmount || parseFloat(settleAmount) <= 0) {
+      setSettleError("Please enter a valid amount and recipient.");
+      return;
+    }
+
+    setSettling(true);
+    setSettleError(null);
+
+    const amountNum = parseFloat(settleAmount);
+
+    // 1. Create settlement expense
+    const { data: expenseData, error: expenseError } = await supabase
+      .from("expenses")
+      .insert({
+        group_id: id,
+        description: `Settlement to ${userMap[settleRecipient]?.full_name || "friend"}`,
+        amount: amountNum,
+        paid_by: currentUserId,
+        category: "settlement",
+        is_settlement: true,
+      })
+      .select("id")
+      .single();
+
+    if (expenseError || !expenseData) {
+      setSettleError(expenseError?.message || "Failed to record settlement.");
+      setSettling(false);
+      return;
+    }
+
+    // 2. Insert split for recipient
+    const { error: splitError } = await supabase.from("expense_splits").insert({
+      expense_id: expenseData.id,
+      user_id: settleRecipient,
+      amount_owed: amountNum,
+    });
+
+    if (splitError) {
+      setSettleError(splitError.message);
+      setSettling(false);
+      return;
+    }
+
+    setSettling(false);
+    setShowManualSettle(false);
+    setSettleAmount("");
+    await loadData();
+  };
+
   if (loading) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-6">
@@ -161,6 +225,8 @@ export default function GroupDetailPage() {
       </main>
     );
   }
+
+  const otherMembers = members.filter((m) => m.id !== currentUserId);
 
   return (
     <main className="mx-auto w-full max-w-4xl space-y-4 px-4 pb-24 pt-6 md:pb-6">
@@ -184,6 +250,7 @@ export default function GroupDetailPage() {
         <BalanceCard label="Total Net Balance" amount={currentNet} tone="net" />
       </section>
 
+      {/* Action Buttons */}
       <div className="flex flex-wrap items-center gap-2">
         <AddExpenseModal
           groupId={group.id}
@@ -197,7 +264,86 @@ export default function GroupDetailPage() {
           suggestions={balanceResult.settlements}
           onSettled={loadData}
         />
+        <Button
+          variant="outline"
+          onClick={() => setShowManualSettle(!showManualSettle)}
+          className="border-teal-700 text-teal-800 hover:bg-teal-50"
+        >
+          <HandCoins className="mr-2 h-4 w-4" />
+          Direct Settle
+        </Button>
       </div>
+
+      {/* Manual Settle Up Drawer / Card */}
+      {showManualSettle && (
+        <Card className="border-teal-300 bg-teal-50/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base text-teal-900">Record a Settlement</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {otherMembers.length === 0 ? (
+              <p className="text-xs text-slate-600">No other members in this group to settle with.</p>
+            ) : (
+              <form onSubmit={handleDirectSettle} className="space-y-3">
+                {settleError && <p className="text-xs font-semibold text-rose-600">{settleError}</p>}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Paying To
+                    </label>
+                    <select
+                      value={settleRecipient}
+                      onChange={(e) => setSettleRecipient(e.target.value)}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    >
+                      {otherMembers.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.full_name || m.email || "Member"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Amount ($)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      placeholder="0.00"
+                      value={settleAmount}
+                      onChange={(e) => setSettleAmount(e.target.value)}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 justify-end">
+  <Button
+    type="button"
+    variant="outline"
+    size="sm"
+    onClick={() => setShowManualSettle(false)}
+  >
+    Cancel
+  </Button>
+  <Button
+    type="submit"
+    size="sm"
+    disabled={settling}
+    className="bg-teal-700 text-white hover:bg-teal-800"
+  >
+    {settling && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+    Confirm Settlement
+  </Button>
+</div>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -208,7 +354,10 @@ export default function GroupDetailPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {balanceResult.settlements.length === 0 ? (
-            <p className="text-sm text-emerald-700">Everything is settled up in this group.</p>
+            <div className="flex items-center gap-2 text-sm text-emerald-700 font-medium">
+              <CheckCircle2 className="h-4 w-4" />
+              Everything is settled up in this group.
+            </div>
           ) : (
             balanceResult.settlements.map((settlement, index) => (
               <p key={`${settlement.fromUserId}-${settlement.toUserId}-${index}`} className="text-sm text-slate-700">
