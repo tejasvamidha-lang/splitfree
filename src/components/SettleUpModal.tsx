@@ -60,7 +60,7 @@ export function SettleUpModal({ groupId, members, suggestions, onSettled }: Sett
         description: `Settlement: ${fromName} paid ${toName}`,
         amount: roundToCents(settledAmount),
         paid_by: fromUserId,
-        category: "General",
+        category: "settlement",
         is_settlement: true,
       })
       .select("id")
@@ -127,7 +127,7 @@ export function SettleUpModal({ groupId, members, suggestions, onSettled }: Sett
                 suggestions.map((item, index) => (
                   <div key={`${item.fromUserId}-${item.toUserId}-${index}`} className="flex items-center justify-between gap-2">
                     <p className="text-xs text-slate-700">
-                      {memberMap[item.fromUserId]?.full_name ?? "Unknown"} owes {" "}
+                      {memberMap[item.fromUserId]?.full_name ?? "Unknown"} owes{" "}
                       {memberMap[item.toUserId]?.full_name ?? "Unknown"} ${item.amount.toFixed(2)}
                     </p>
                     <Button
