@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, ChevronLeft, CheckCircle2, Loader2, HandCoins } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ChevronLeft,
+  CheckCircle2,
+  Loader2,
+  HandCoins,
+  UserX,
+  Users,
+} from "lucide-react";
 
 import { AddExpenseModal } from "@/components/AddExpenseModal";
 import { BalanceCard } from "@/components/BalanceCard";
@@ -40,6 +48,9 @@ export default function GroupDetailPage() {
   const [settleAmount, setSettleAmount] = useState<string>("");
   const [settling, setSettling] = useState(false);
   const [settleError, setSettleError] = useState<string | null>(null);
+
+  // Remove Member State
+  const [removingUserId, setRemovingUserId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -128,7 +139,6 @@ export default function GroupDetailPage() {
     setMembers(mappedMembers);
     setExpenses(expensesWithSplits);
 
-    // Set default recipient to someone else in the group
     const otherMember = mappedMembers.find((m) => m.id !== user.id);
     if (otherMember) {
       setSettleRecipient(otherMember.id);
@@ -171,7 +181,6 @@ export default function GroupDetailPage() {
 
     const amountNum = parseFloat(settleAmount);
 
-    // 1. Create settlement expense
     const { data: expenseData, error: expenseError } = await supabase
       .from("expenses")
       .insert({
@@ -191,7 +200,6 @@ export default function GroupDetailPage() {
       return;
     }
 
-    // 2. Insert split for recipient
     const { error: splitError } = await supabase.from("expense_splits").insert({
       expense_id: expenseData.id,
       user_id: settleRecipient,
@@ -208,6 +216,37 @@ export default function GroupDetailPage() {
     setShowManualSettle(false);
     setSettleAmount("");
     await loadData();
+  };
+
+  // Remove Member Function
+  const handleRemoveMember = async (targetUserId: string, targetName: string) => {
+    const isSelf = targetUserId === currentUserId;
+    const confirmMessage = isSelf
+      ? "Are you sure you want to leave this group?"
+      : `Are you sure you want to remove ${targetName} from this group?`;
+
+    if (!window.confirm(confirmMessage)) return;
+
+    setRemovingUserId(targetUserId);
+
+    const { error: removeError } = await supabase
+      .from("group_members")
+      .delete()
+      .eq("group_id", id)
+      .eq("user_id", targetUserId);
+
+    if (removeError) {
+      alert(`Failed to remove member: ${removeError.message}`);
+      setRemovingUserId(null);
+      return;
+    }
+
+    if (isSelf) {
+      router.push("/groups");
+    } else {
+      await loadData();
+      setRemovingUserId(null);
+    }
   };
 
   if (loading) {
@@ -227,6 +266,7 @@ export default function GroupDetailPage() {
   }
 
   const otherMembers = members.filter((m) => m.id !== currentUserId);
+  const isCreator = group.created_by === currentUserId;
 
   return (
     <main className="mx-auto w-full max-w-4xl space-y-4 px-4 pb-24 pt-6 md:pb-6">
@@ -321,30 +361,89 @@ export default function GroupDetailPage() {
                 </div>
 
                 <div className="flex gap-2 justify-end">
-  <Button
-    type="button"
-    variant="outline"
-    size="sm"
-    onClick={() => setShowManualSettle(false)}
-  >
-    Cancel
-  </Button>
-  <Button
-    type="submit"
-    size="sm"
-    disabled={settling}
-    className="bg-teal-700 text-white hover:bg-teal-800"
-  >
-    {settling && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
-    Confirm Settlement
-  </Button>
-</div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowManualSettle(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={settling}
+                    className="bg-teal-700 text-white hover:bg-teal-800"
+                  >
+                    {settling && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                    Confirm Settlement
+                  </Button>
+                </div>
               </form>
             )}
           </CardContent>
         </Card>
       )}
 
+      {/* Group Members List with Remove Option */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Users className="h-4 w-4" />
+            Group Members ({members.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="divide-y divide-slate-100">
+          {members.map((member) => {
+            const isSelf = member.id === currentUserId;
+            const canRemove = isCreator || isSelf;
+
+            return (
+              <div key={member.id} className="flex items-center justify-between py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-bold uppercase text-slate-700">
+                    {member.full_name?.charAt(0) || member.email?.charAt(0) || "U"}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">
+                      {member.full_name || member.email || "Member"}{" "}
+                      {isSelf && <span className="text-xs text-slate-400 font-normal">(You)</span>}
+                      {member.id === group.created_by && (
+                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                          Admin
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {canRemove && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={removingUserId === member.id}
+                    onClick={() =>
+                      handleRemoveMember(member.id, member.full_name || member.email || "Member")
+                    }
+                    className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 h-8 px-2.5 text-xs"
+                  >
+                    {removingUserId === member.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <>
+                        <UserX className="mr-1 h-3.5 w-3.5" />
+                        {isSelf ? "Leave" : "Remove"}
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* Debt Simplification */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
